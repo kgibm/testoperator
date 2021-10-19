@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	testv1alpha1 "github.com/kgibm/testoperator/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 // TestReconciler reconciles a Test object
@@ -32,6 +34,8 @@ type TestReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
+
+const FinalizerName = "example.com/finalizer"
 
 //+kubebuilder:rbac:groups=test.example.com,resources=tests,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=test.example.com,resources=tests/status,verbs=get;update;patch
@@ -46,11 +50,60 @@ type TestReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.9.2/pkg/reconcile
-func (r *TestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+func (r *TestReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 
-	// your logic here
+	logger.Info("Reconcile started")
 
+	test := &testv1alpha1.Test{}
+	err := r.Get(ctx, request.NamespacedName, test)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Resource not found")
+			return ctrl.Result{}, nil
+		}
+		logger.Info("Error retrieving resource")
+		return ctrl.Result{}, err
+	}
+
+	// Check if we are finalizing
+	isMarkedToBeDeleted := test.GetDeletionTimestamp() != nil
+	if isMarkedToBeDeleted {
+		logger.Info("Marked to be deleted")
+		if controllerutil.ContainsFinalizer(test, FinalizerName) {
+			logger.Info("Contains finalizer")
+
+			// Remove finalizer. Once all finalizers have been
+			// removed, the object will be deleted.
+			controllerutil.RemoveFinalizer(test, FinalizerName)
+			err := r.Update(ctx, test)
+			if err != nil {
+				logger.Info("Removing finalizer error")
+				return ctrl.Result{}, err
+			}
+			logger.Info("Removed finalizer")
+		}
+		logger.Info("Returning successfully within mark check")
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer for this CR
+	if !controllerutil.ContainsFinalizer(test, FinalizerName) {
+		logger.Info("Adding finalizer")
+		controllerutil.AddFinalizer(test, FinalizerName)
+		err = r.Update(ctx, test)
+		if err != nil {
+			logger.Info("Failed to add finalizer")
+			return ctrl.Result{}, err
+		} else {
+			logger.Info("Added finalizer")
+			return ctrl.Result{}, nil
+		}
+	}
+
+	logger.Info("Started normal processing")
+
+	logger.Info("Final successful return")
 	return ctrl.Result{}, nil
 }
 
